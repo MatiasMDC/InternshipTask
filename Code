@@ -1,0 +1,145 @@
+#include <InfluxDbClient.h>
+#include <DHT11.h>
+#include <ESP8266WiFi.h>
+#include <Wire.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+#include <InfluxDbClient.h>
+#include <InfluxDbCloud.h>
+
+#define DEVICE "ESP8266"
+#define INFLUXDB_URL "http://localhost:8086"
+#define INFLUXDB_TOKEN "tlX2VfwqN8ptqQV2LDGDxIF0RGamZjSyVI82F8ew8PGHC_EH2ZaEK3hznqKxh_tJPqoQTCPmoKj2MRr_AfT96Q=="
+#define INFLUXDB_ORG "35d9c13a2d7a42e2"
+#define INFLUXDB_BUCKET "beia"  
+#define INFLUXDB_MEASUREMENT "sensor_data"
+#define TZ_INFO "EET-2EEST,M3.5.0/3,M10.5.0/4"
+
+
+InfluxDBClient Client(INFLUXDB_URL, INFLUXDB_ORG, INFLUXDB_BUCKET, INFLUXDB_TOKEN, InfluxDbCloud2CACert); 
+Point sensor("Temp-Hum");
+
+const char* wifi_ssid = "DIGI-ft6c";
+const char* wifi_password = "SuEUtY4hts";
+
+const char* mqtt_server = "mqtt.beia-telemetrie.ro";
+const char* mqtt_topic = "/training/device/matias-vaduva/data";
+
+WiFiClient espClient;
+PubSubClient client(espClient); 
+
+DHT11 dht11(D4);
+
+void setup() {
+  
+  Serial.begin(9600);
+  setup_wifi();
+  client.setServer(mqtt_server, 1883);
+  dht11.setDelay(5000);
+  
+
+  sensor.addTag("device", DEVICE);
+  sensor.addTag("SSID", wifi_ssid);
+
+  timeSync(TZ_INFO, "pool.ntp.org", "time.nis.gov" );
+
+  if (Client.validateConnection()){
+
+    Serial.print("Connected to InfluxDB: ");
+    Serial.println(Client.getServerUrl());
+
+  }
+
+  else
+  {
+
+    Serial.print("InfluxDB connection failed: ");
+    Serial.println(Client.getLastErrorMessage());
+  }
+}
+
+void setup_wifi(){
+
+WiFi.begin(wifi_ssid, wifi_password);
+while (WiFi.status() != WL_CONNECTED){
+    delay(5000);
+    Serial.print(".");
+}
+
+Serial.println("Wifi - connected");
+
+}
+
+void reconnect() {
+
+  while (!client.connected()) {
+    if (client.connect("ESP8266Client")) {
+      Serial.println("Connected to MQTT Broker!");
+      Serial.print("\n");
+    }
+
+  else
+    {
+      delay(50000);
+    }
+  }
+}
+
+
+void loop() {
+ 
+if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+
+int temperature = 0;
+int humidity = 0;
+StaticJsonDocument<200> doc;
+
+
+sensor.clearFields(); 
+
+int result = dht11.readTemperatureHumidity(temperature, humidity);
+
+sensor.addField("temperature", temperature);
+sensor.addField("humidity", humidity);
+
+if (!Client.writePoint(sensor))
+{
+    Serial.print("InfluxDB write failed: ");
+    Serial.println(Client.getLastErrorMessage());
+}
+
+
+  if (result == 0) {
+    doc["Temperature (°C)"] = temperature;
+      Serial.print("The temperature is : ");
+      Serial.print(temperature);
+      Serial.println("°C");
+      Serial.print("\n");
+    doc["Humidity (%)"] = humidity;
+      Serial.print("The humidity in the air is : ");
+      Serial.print(humidity);
+      Serial.println(" %");
+      Serial.print("\n");
+
+  }
+
+  else {
+
+      Serial.println(DHT11::getErrorString(result));
+
+  }
+
+  char jsonBuffer[200];
+  serializeJson(doc, jsonBuffer);
+  client.publish(mqtt_topic, jsonBuffer);
+
+  delay(5000);
+
+
+
+
+
+}
